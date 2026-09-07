@@ -1,0 +1,17 @@
+node_modules/
+.next/
+out/
+dist/
+coverage/
+
+.env
+.env.*
+!.env.example
+
+# Scan reports and exports can contain evidence excerpts from client sites.
+exports/
+reports/
+
+.DS_Store
+Thumbs.db
+*.log
