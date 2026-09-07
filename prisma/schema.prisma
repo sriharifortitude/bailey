@@ -1,0 +1,352 @@
+// Every tenant-owned table carries organisationId as a real column rather than
+// relying on a join to establish ownership. Postgres row-level security
+// policies are written against that column (see prisma/migrations/*_rls), so a
+// query that forgets to scope itself returns nothing instead of returning
+// another customer's data. The application-layer guard in src/lib/db/tenant.ts
+// is the first line; RLS is the one that holds when the first line is wrong.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --- Identity -------------------------------------------------------------
+
+model User {
+  id           String    @id @default(uuid()) @db.Uuid
+  email        String    @unique
+  // argon2id. Null for a user created by invitation who has not set one yet.
+  passwordHash String?
+  name         String
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  // Soft delete so audit history stays referentially intact; the erasure job
+  // separately overwrites the personal fields. See docs/adr/0004.
+  deletedAt    DateTime?
+
+  memberships     Membership[]
+  sessions        Session[]
+  sentInvitations Invitation[] @relation("InvitedBy")
+  auditEvents     AuditEvent[]
+  assignedIssues  Issue[]      @relation("AssignedTo")
+
+  @@index([deletedAt])
+  @@map("users")
+}
+
+// Sessions are opaque random tokens stored as a hash, not JWTs. See
+// docs/adr/0002-sessions-not-jwts.md.
+model Session {
+  id        String   @id @default(uuid()) @db.Uuid
+  // sha256 of the token. A database leak must not yield usable sessions.
+  tokenHash String   @unique
+  userId    String   @db.Uuid
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  // Truncated for GDPR data minimisation; enough to let a user recognise a
+  // session in the "active sessions" list, not enough to track them.
+  userAgent String?
+  ipPrefix  String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+// --- Tenancy --------------------------------------------------------------
+
+model Organisation {
+  id        String    @id @default(uuid()) @db.Uuid
+  name      String
+  slug      String    @unique
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  // Retention: scan data older than this is deleted by a scheduled job.
+  // Configurable per organisation because retention is a contractual term
+  // between an agency and its own clients.
+  scanRetentionDays Int @default(365)
+
+  memberships Membership[]
+  invitations Invitation[]
+  sites       Site[]
+  scanRuns    ScanRun[]
+  findings    Finding[]
+  issues      Issue[]
+  auditEvents AuditEvent[]
+
+  @@map("organisations")
+}
+
+enum Role {
+  owner
+  admin
+  member
+  viewer
+}
+
+model Membership {
+  id             String   @id @default(uuid()) @db.Uuid
+  organisationId String   @db.Uuid
+  userId         String   @db.Uuid
+  role           Role
+  createdAt      DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organisationId, userId])
+  @@index([userId])
+  @@map("memberships")
+}
+
+model Invitation {
+  id             String    @id @default(uuid()) @db.Uuid
+  organisationId String    @db.Uuid
+  email          String
+  role           Role
+  // Hashed for the same reason session tokens are.
+  tokenHash      String    @unique
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+  revokedAt      DateTime?
+  invitedByUserId String   @db.Uuid
+  createdAt      DateTime  @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  invitedBy    User         @relation("InvitedBy", fields: [invitedByUserId], references: [id])
+
+  // One live invitation per address per organisation; re-inviting replaces it.
+  @@unique([organisationId, email])
+  @@index([expiresAt])
+  @@map("invitations")
+}
+
+// --- Monitored sites ------------------------------------------------------
+
+enum VerificationMethod {
+  dns_txt
+  well_known_file
+}
+
+enum ScanFrequency {
+  manual
+  daily
+  weekly
+}
+
+// A site cannot be scanned until control of it is proven. Without this the
+// platform is an SSRF proxy and an abuse vector: anyone could point it at a
+// third party and have our infrastructure send the requests.
+model Site {
+  id             String   @id @default(uuid()) @db.Uuid
+  organisationId String   @db.Uuid
+  label          String
+  // Origin only, normalised. Path is not part of a site's identity.
+  origin         String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  deletedAt      DateTime?
+
+  verificationMethod VerificationMethod
+  // Random per site, never reused, and still required after verification so a
+  // periodic re-check can confirm control has not lapsed.
+  verificationToken  String
+  verifiedAt         DateTime?
+  verificationCheckedAt DateTime?
+
+  scanFrequency ScanFrequency @default(manual)
+  // Null until the first scan is scheduled.
+  nextScanAt    DateTime?
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  scanRuns     ScanRun[]
+  findings     Finding[]
+  issues       Issue[]
+
+  @@unique([organisationId, origin])
+  @@index([organisationId, deletedAt])
+  @@index([nextScanAt])
+  @@map("sites")
+}
+
+// --- Scanning -------------------------------------------------------------
+
+enum ScanStatus {
+  queued
+  running
+  succeeded
+  failed
+}
+
+model ScanRun {
+  id             String     @id @default(uuid()) @db.Uuid
+  organisationId String     @db.Uuid
+  siteId         String     @db.Uuid
+  status         ScanStatus @default(queued)
+  // Which release of the scanner produced this, so a change in findings can be
+  // attributed to the target changing rather than the tool changing.
+  scannerVersion String?
+  queuedAt       DateTime   @default(now())
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  requestCount   Int?
+  // Present only when status is failed. Never contains response bodies.
+  failureReason  String?
+
+  // Counts denormalised so the site list does not aggregate on every render.
+  criticalCount Int @default(0)
+  highCount     Int @default(0)
+  mediumCount   Int @default(0)
+  lowCount      Int @default(0)
+  infoCount     Int @default(0)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  site         Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  findings     Finding[]
+
+  @@index([organisationId, siteId, queuedAt])
+  @@index([status])
+  @@map("scan_runs")
+}
+
+// One observation from one scan. Immutable. The triageable, durable thing is
+// Issue; this is the per-run evidence that an issue was present.
+model Finding {
+  id             String @id @default(uuid()) @db.Uuid
+  organisationId String @db.Uuid
+  scanRunId      String @db.Uuid
+  siteId         String @db.Uuid
+  issueId        String @db.Uuid
+
+  // The scanner's stable finding id, e.g. "headers/csp/missing".
+  findingKey String
+  checkId    String
+  category   String
+  severity   Severity
+  confidence String
+  title      String
+  summary    String
+  remediation String
+  targetUrl  String
+  // Redacted by the scanner before it reaches us, but treated as sensitive.
+  evidence   Json
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  scanRun      ScanRun      @relation(fields: [scanRunId], references: [id], onDelete: Cascade)
+  site         Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  issue        Issue        @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, scanRunId])
+  @@index([issueId])
+  @@map("findings")
+}
+
+enum Severity {
+  critical
+  high
+  medium
+  low
+  info
+}
+
+enum IssueStatus {
+  open
+  accepted
+  resolved
+  // Was resolved, then observed again. The state the product exists to surface.
+  regressed
+}
+
+// The durable identity of a problem across scans, and the thing a human
+// triages. Identified by fingerprint so that the same weakness found in
+// March and in June is one issue with a history, not two rows.
+model Issue {
+  id             String      @id @default(uuid()) @db.Uuid
+  organisationId String      @db.Uuid
+  siteId         String      @db.Uuid
+  // siteId + findingKey + targetUrl, hashed. Deliberately excludes severity:
+  // a rubric change must not orphan an issue's triage history.
+  fingerprint    String
+  findingKey     String
+  checkId        String
+  category       String
+  severity       Severity
+  title          String
+  status         IssueStatus @default(open)
+
+  firstSeenAt DateTime
+  lastSeenAt  DateTime
+  resolvedAt  DateTime?
+  // Risk accepted until this date; after it, the issue returns to open.
+  // A null date with status accepted means accepted indefinitely.
+  acceptedUntil DateTime?
+  acceptedReason String?
+
+  assignedToUserId String? @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  site         Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  assignedTo   User?        @relation("AssignedTo", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+  findings     Finding[]
+  events       IssueEvent[]
+
+  @@unique([siteId, fingerprint])
+  @@index([organisationId, status, severity])
+  @@map("issues")
+}
+
+// Append-only history of what happened to an issue and who did it. Needed for
+// the "why is this accepted?" conversation, and it is what makes a client
+// report defensible.
+model IssueEvent {
+  id             String   @id @default(uuid()) @db.Uuid
+  organisationId String   @db.Uuid
+  issueId        String   @db.Uuid
+  // Null when the platform itself made the change, e.g. auto-resolution.
+  actorUserId    String?  @db.Uuid
+  type           String
+  fromStatus     IssueStatus?
+  toStatus       IssueStatus?
+  note           String?
+  createdAt      DateTime @default(now())
+
+  issue Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  @@index([issueId, createdAt])
+  @@map("issue_events")
+}
+
+// --- Audit ----------------------------------------------------------------
+
+// Append-only. Retained independently of the records it describes, because an
+// audit trail that disappears with the thing it audits is not an audit trail.
+model AuditEvent {
+  id             String   @id @default(uuid()) @db.Uuid
+  organisationId String?  @db.Uuid
+  actorUserId    String?  @db.Uuid
+  action         String
+  targetType     String?
+  targetId       String?
+  metadata       Json?
+  ipPrefix       String?
+  createdAt      DateTime @default(now())
+
+  organisation Organisation? @relation(fields: [organisationId], references: [id], onDelete: SetNull)
+  actor        User?         @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([organisationId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@map("audit_events")
+}
