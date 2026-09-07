@@ -17,12 +17,12 @@ const schema = z.object({
 
   REDIS_URL: z.string().url(),
 
-  // 32 bytes minimum once decoded. Used to sign session cookies.
-  SESSION_SECRET: z
+  // 32 bytes minimum once decoded. Used to derive CSRF tokens; session tokens are opaque random values validated by database lookup and need no signature.
+  AUTH_SECRET: z
     .string()
-    .min(1, 'SESSION_SECRET is required')
+    .min(1, 'AUTH_SECRET is required')
     .refine((value) => Buffer.from(value, 'base64').length >= 32, {
-      message: 'SESSION_SECRET must decode to at least 32 bytes',
+      message: 'AUTH_SECRET must decode to at least 32 bytes',
     }),
 
   APP_ORIGIN: z.string().url(),
