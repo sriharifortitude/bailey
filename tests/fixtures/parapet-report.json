@@ -1,0 +1,292 @@
+{
+  "tool": {
+    "name": "parapet-scan",
+    "version": "0.1.0"
+  },
+  "startedAt": "2026-09-07T13:57:46.416Z",
+  "finishedAt": "2026-09-07T13:57:52.824Z",
+  "results": [
+    {
+      "target": "https://example.com/",
+      "findings": [
+        {
+          "id": "headers/csp/missing",
+          "title": "No Content-Security-Policy",
+          "severity": "medium",
+          "confidence": "firm",
+          "summary": "The response carries no Content-Security-Policy. An injection flaw anywhere in the application therefore has no second line of defence: injected script runs with the full privileges of the origin.",
+          "evidence": [
+            {
+              "kind": "missing-header",
+              "name": "content-security-policy"
+            }
+          ],
+          "remediation": "Introduce a nonce-based policy, starting with default-src 'self' and object-src 'none'. Deploy it in report-only mode first to find violations.",
+          "references": [
+            {
+              "title": "MDN: Content-Security-Policy",
+              "url": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy"
+            },
+            {
+              "title": "OWASP Content Security Policy Cheat Sheet",
+              "url": "https://cheatsheetseries.owasp.org/cheatsheets/Content_Security_Policy_Cheat_Sheet.html"
+            }
+          ],
+          "checkId": "headers/csp",
+          "category": "headers",
+          "target": "https://example.com/"
+        },
+        {
+          "id": "headers/framing/missing",
+          "title": "No clickjacking protection",
+          "severity": "medium",
+          "confidence": "firm",
+          "summary": "Neither CSP frame-ancestors nor X-Frame-Options is set, so any site may embed this page in a frame and overlay it. Where the page performs a state-changing action on click, that action can be induced from a third-party site.",
+          "evidence": [
+            {
+              "kind": "missing-header",
+              "name": "x-frame-options"
+            },
+            {
+              "kind": "note",
+              "text": "No frame-ancestors directive in Content-Security-Policy."
+            }
+          ],
+          "remediation": "Add frame-ancestors 'none' to the CSP (or 'self' if the application frames its own pages). Send X-Frame-Options: DENY alongside it only if you still support browsers that predate CSP Level 2.",
+          "references": [
+            {
+              "title": "OWASP Clickjacking Defense Cheat Sheet",
+              "url": "https://cheatsheetseries.owasp.org/cheatsheets/Clickjacking_Defense_Cheat_Sheet.html"
+            }
+          ],
+          "checkId": "headers/framing",
+          "category": "headers",
+          "target": "https://example.com/"
+        },
+        {
+          "id": "headers/hsts/missing",
+          "title": "No Strict-Transport-Security header",
+          "severity": "medium",
+          "confidence": "firm",
+          "summary": "The origin does not instruct browsers to use https exclusively. A first visit typed as a bare hostname, or any link written as http, is sent in plaintext and can be intercepted and downgraded before the redirect to https is ever seen.",
+          "evidence": [
+            {
+              "kind": "missing-header",
+              "name": "strict-transport-security"
+            }
+          ],
+          "remediation": "Send Strict-Transport-Security: max-age=31536000; includeSubDomains on https responses. Roll the max-age up gradually, and confirm every subdomain serves https before adding includeSubDomains.",
+          "references": [
+            {
+              "title": "RFC 6797: HTTP Strict Transport Security",
+              "url": "https://datatracker.ietf.org/doc/html/rfc6797"
+            }
+          ],
+          "checkId": "headers/hsts",
+          "category": "headers",
+          "target": "https://example.com/"
+        },
+        {
+          "id": "tls/plaintext-transport/served-over-http",
+          "title": "Content is served over plaintext http",
+          "severity": "medium",
+          "confidence": "confirmed",
+          "summary": "The http endpoint answered 200 directly instead of redirecting. Users and links that reach the plaintext origin stay there, so the https deployment is bypassed rather than enforced.",
+          "evidence": [
+            {
+              "kind": "exchange",
+              "method": "GET",
+              "url": "http://example.com/",
+              "status": 200
+            }
+          ],
+          "remediation": "Return a 301 to the https URL for every http request, then send HSTS on the https responses so subsequent visits never make the plaintext request at all.",
+          "references": [
+            {
+              "title": "OWASP Transport Layer Security Cheat Sheet",
+              "url": "https://cheatsheetseries.owasp.org/cheatsheets/Transport_Layer_Security_Cheat_Sheet.html"
+            }
+          ],
+          "checkId": "tls/plaintext-transport",
+          "category": "tls",
+          "target": "https://example.com/"
+        },
+        {
+          "id": "tls/protocols/deprecated",
+          "title": "Server negotiates TLSv1 and TLSv1.1",
+          "severity": "medium",
+          "confidence": "confirmed",
+          "summary": "TLSv1 and TLSv1.1 are deprecated by RFC 8996. They rely on MD5 and SHA-1 in the handshake and lack modern cipher constructions, and their availability lets a network attacker negotiate a weaker connection than both parties are capable of. Accepting them also fails PCI DSS.",
+          "evidence": [
+            {
+              "kind": "note",
+              "text": "Accepted protocol versions: TLSv1, TLSv1.1, TLSv1.2, TLSv1.3"
+            }
+          ],
+          "remediation": "Set the minimum protocol version to TLS 1.2 at the terminating server or load balancer. Check client analytics first if you support long-tail legacy devices.",
+          "references": [
+            {
+              "title": "RFC 8996: Deprecating TLS 1.0 and TLS 1.1",
+              "url": "https://datatracker.ietf.org/doc/html/rfc8996"
+            }
+          ],
+          "checkId": "tls/protocols",
+          "category": "tls",
+          "target": "https://example.com/"
+        },
+        {
+          "id": "headers/content-type-options/missing",
+          "title": "MIME sniffing is not disabled",
+          "severity": "low",
+          "confidence": "firm",
+          "summary": "Without X-Content-Type-Options: nosniff, browsers may ignore the declared Content-Type and infer a type from the bytes. A user-uploaded file served as text or octet-stream can then be interpreted as script or stylesheet.",
+          "evidence": [
+            {
+              "kind": "missing-header",
+              "name": "x-content-type-options"
+            }
+          ],
+          "remediation": "Send X-Content-Type-Options: nosniff on every response.",
+          "references": [
+            {
+              "title": "MDN: X-Content-Type-Options",
+              "url": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Content-Type-Options"
+            }
+          ],
+          "checkId": "headers/content-type-options",
+          "category": "headers",
+          "target": "https://example.com/"
+        },
+        {
+          "id": "headers/cross-origin-opener/missing",
+          "title": "No Cross-Origin-Opener-Policy header",
+          "severity": "low",
+          "confidence": "firm",
+          "summary": "The document shares a browsing context group with any page that opens it, so a cross-origin opener retains a window reference and can navigate or probe it. This is the mechanism behind tabnabbing and it also blocks cross-origin isolation.",
+          "evidence": [
+            {
+              "kind": "missing-header",
+              "name": "cross-origin-opener-policy"
+            }
+          ],
+          "remediation": "Send Cross-Origin-Opener-Policy: same-origin on document responses.",
+          "references": [
+            {
+              "title": "MDN: Cross-Origin-Opener-Policy",
+              "url": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cross-Origin-Opener-Policy"
+            }
+          ],
+          "checkId": "headers/cross-origin-opener",
+          "category": "headers",
+          "target": "https://example.com/"
+        },
+        {
+          "id": "headers/referrer-policy/missing",
+          "title": "No Referrer-Policy header",
+          "severity": "low",
+          "confidence": "firm",
+          "summary": "The browser default is strict-origin-when-cross-origin in current versions, but it is not guaranteed and older clients send the full URL. Where URLs carry session identifiers, reset tokens or record ids, those reach every third-party host the page links to or loads a resource from.",
+          "evidence": [
+            {
+              "kind": "missing-header",
+              "name": "referrer-policy"
+            }
+          ],
+          "remediation": "Send Referrer-Policy: strict-origin-when-cross-origin, or no-referrer if no outbound referrer information is needed.",
+          "references": [
+            {
+              "title": "MDN: Referrer-Policy",
+              "url": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Referrer-Policy"
+            }
+          ],
+          "checkId": "headers/referrer-policy",
+          "category": "headers",
+          "target": "https://example.com/"
+        },
+        {
+          "id": "disclosure/security-txt/missing",
+          "title": "No security.txt published",
+          "severity": "info",
+          "confidence": "firm",
+          "summary": "There is no /.well-known/security.txt, so a researcher who finds a vulnerability has no documented way to report it. In practice reports then arrive through support channels that are not equipped to triage them, or not at all.",
+          "evidence": [
+            {
+              "kind": "note",
+              "text": "/.well-known/security.txt returned 404."
+            }
+          ],
+          "remediation": "Publish /.well-known/security.txt with at least a Contact field and an Expires timestamp, per RFC 9116.",
+          "references": [
+            {
+              "title": "RFC 9116: A File Format to Aid in Security Vulnerability Disclosure",
+              "url": "https://datatracker.ietf.org/doc/html/rfc9116"
+            }
+          ],
+          "checkId": "disclosure/security-txt",
+          "category": "disclosure",
+          "target": "https://example.com/"
+        },
+        {
+          "id": "disclosure/server-banner/present",
+          "title": "Response headers name the server software",
+          "severity": "info",
+          "confidence": "confirmed",
+          "summary": "The responses name the server software. On its own this is low value to an attacker, but it narrows the set of techniques worth trying.",
+          "evidence": [
+            {
+              "kind": "header",
+              "name": "server",
+              "value": "cloudflare"
+            }
+          ],
+          "remediation": "Remove or genericise these headers if there is no operational reason to keep them.",
+          "references": [
+            {
+              "title": "OWASP WSTG: Fingerprint Web Server",
+              "url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/01-Information_Gathering/02-Fingerprint_Web_Server"
+            }
+          ],
+          "checkId": "disclosure/server-banner",
+          "category": "disclosure",
+          "target": "https://example.com/"
+        },
+        {
+          "id": "headers/permissions-policy/missing",
+          "title": "No Permissions-Policy header",
+          "severity": "info",
+          "confidence": "firm",
+          "summary": "Powerful features -- camera, microphone, geolocation, payment -- are left at their defaults for the document and for anything it embeds. This is a hardening opportunity rather than a weakness on its own.",
+          "evidence": [
+            {
+              "kind": "missing-header",
+              "name": "permissions-policy"
+            }
+          ],
+          "remediation": "Send a Permissions-Policy denying the features the application does not use, for example: camera=(), microphone=(), geolocation=(), payment=()",
+          "references": [
+            {
+              "title": "MDN: Permissions-Policy",
+              "url": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Permissions-Policy"
+            }
+          ],
+          "checkId": "headers/permissions-policy",
+          "category": "headers",
+          "target": "https://example.com/"
+        }
+      ],
+      "suppressed": [],
+      "collectorErrors": [],
+      "checkErrors": [],
+      "skippedChecks": [],
+      "requestCount": 15,
+      "elapsedMs": 6403
+    }
+  ],
+  "summary": {
+    "critical": 0,
+    "high": 0,
+    "medium": 5,
+    "low": 3,
+    "info": 3
+  }
+}
