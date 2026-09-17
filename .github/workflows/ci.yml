@@ -17,6 +17,15 @@ jobs:
   verify:
     name: Typecheck, lint, unit tests, build
     runs-on: ubuntu-latest
+    # The env module validates at import, and the unit tests reach it
+    # transitively through the session helpers. Nothing here is real and no
+    # step in this job connects to anything.
+    env:
+      DATABASE_URL: postgresql://x:x@localhost:5432/x
+      APP_DATABASE_URL: postgresql://y:y@localhost:5432/x
+      REDIS_URL: redis://localhost:6379
+      AUTH_SECRET: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      APP_ORIGIN: http://localhost:3000
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -28,16 +37,7 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
-      # The build needs an env to validate at import time; nothing here is
-      # real and the build does not connect to anything.
-      - name: Production build
-        run: npm run build
-        env:
-          DATABASE_URL: postgresql://x:x@localhost:5432/x
-          APP_DATABASE_URL: postgresql://y:y@localhost:5432/x
-          REDIS_URL: redis://localhost:6379
-          AUTH_SECRET: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
-          APP_ORIGIN: http://localhost:3000
+      - run: npm run build
 
   integration:
     name: Integration tests against Postgres
