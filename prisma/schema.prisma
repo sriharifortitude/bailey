@@ -33,6 +33,7 @@ model User {
   sentInvitations Invitation[] @relation("InvitedBy")
   auditEvents     AuditEvent[]
   assignedIssues  Issue[]      @relation("AssignedTo")
+  issueEventsMade IssueEvent[]
 
   @@index([deletedAt])
   @@map("users")
@@ -323,6 +324,7 @@ model IssueEvent {
   createdAt      DateTime @default(now())
 
   issue Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  actor User?  @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
 
   @@index([issueId, createdAt])
   @@map("issue_events")
