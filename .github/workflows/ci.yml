@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Typecheck, lint, unit tests, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      # The build needs an env to validate at import time; nothing here is
+      # real and the build does not connect to anything.
+      - name: Production build
+        run: npm run build
+        env:
+          DATABASE_URL: postgresql://x:x@localhost:5432/x
+          APP_DATABASE_URL: postgresql://y:y@localhost:5432/x
+          REDIS_URL: redis://localhost:6379
+          AUTH_SECRET: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          APP_ORIGIN: http://localhost:3000
+
+  integration:
+    name: Integration tests against Postgres
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: bailey_owner
+          POSTGRES_PASSWORD: bailey_local_dev
+          POSTGRES_DB: bailey
+        ports: ['5433:5432']
+        options: >-
+          --health-cmd "pg_isready -U bailey_owner -d bailey"
+          --health-interval 2s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ['6380:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s --health-timeout 3s --health-retries 20
+    env:
+      DATABASE_URL: postgresql://bailey_owner:bailey_local_dev@127.0.0.1:5433/bailey?schema=public
+      APP_DATABASE_URL: postgresql://bailey_app:bailey_local_dev@127.0.0.1:5433/bailey?schema=public
+      REDIS_URL: redis://127.0.0.1:6380
+      AUTH_SECRET: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      APP_ORIGIN: http://localhost:3000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      # Applies the migrations including the RLS policies and the restricted
+      # role; the isolation suite asserts those are actually in force.
+      - run: npx prisma migrate deploy
+      - run: npm run test:integration
