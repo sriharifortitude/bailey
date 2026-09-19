@@ -137,7 +137,9 @@ flows is the obvious next step and is not there yet.
   agency dashboard across all its clients) are not built.
 - **No rate limiting on login.** Argon2id makes each attempt expensive, and
   the dummy-hash path prevents enumeration, but a reverse proxy should still
-  limit attempts per address before this faces the internet.
+  limit attempts per address before this faces the internet —
+  [gatelimit](https://github.com/sriharifortitude/gatelimit) with an
+  IP-keyed rule on `/login` is the intended one.
 - **Retention prunes scan history only.** Issues and their events are kept
   indefinitely; per-organisation deletion is the mechanism for those.
 - **UI is functional, not designed.** It is accessible, consistent and
